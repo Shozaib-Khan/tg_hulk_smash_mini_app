@@ -21,6 +21,14 @@ interface Box extends GameObject {
   type: 'small' | 'medium' | 'large';
 }
 
+interface Coin extends GameObject {
+  zigzagOffset: number;
+  zigzagSpeed: number;
+  baseY: number;
+  collected: boolean;
+  collectAnimation: number;
+}
+
 interface Particle {
   x: number;
   y: number;
@@ -56,15 +64,27 @@ export default function GameCanvas() {
   });
 
   const boxesRef = useRef<Box[]>([]);
+  const coinsRef = useRef<Coin[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const gameSpeedRef = useRef(4);
   const groundYRef = useRef(0);
   const lastBoxSpawnRef = useRef(0);
+  const lastCoinSpawnRef = useRef(0);
   const difficultyTimerRef = useRef(0);
+  const coinImageRef = useRef<HTMLImageElement | null>(null);
 
   const GRAVITY = 0.9;
   const JUMP_FORCE = -16;
   const GROUND_HEIGHT = 80;
+
+  // Load coin image
+  useEffect(() => {
+    const img = new Image();
+    img.src = '/Group 1171275784.png';
+    img.onload = () => {
+      coinImageRef.current = img;
+    };
+  }, []);
 
   // Initialize canvas dimensions
   const initCanvas = useCallback(() => {
@@ -206,6 +226,74 @@ export default function GameCanvas() {
     }
   };
 
+  // Draw coin with zigzag movement and darker colors
+  const drawCoin = (ctx: CanvasRenderingContext2D, coin: Coin) => {
+    if (coin.collected) {
+      // Collection animation - scale up and fade out
+      const scale = 1 + (coin.collectAnimation / 20) * 0.5;
+      const alpha = Math.max(0, 1 - coin.collectAnimation / 20);
+      
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(coin.x + coin.width / 2, coin.y + coin.height / 2);
+      ctx.scale(scale, scale);
+      
+      if (coinImageRef.current) {
+        // Apply darker filter to the image
+        ctx.filter = 'brightness(0.7) contrast(1.2) saturate(1.3)';
+        ctx.drawImage(coinImageRef.current, -coin.width / 2, -coin.height / 2, coin.width, coin.height);
+        ctx.filter = 'none';
+      } else {
+        // Fallback coin drawing with darker colors
+        ctx.fillStyle = '#d97706'; // Darker gold
+        ctx.beginPath();
+        ctx.arc(0, 0, coin.width / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      ctx.restore();
+      return;
+    }
+
+    // Darker glow effect
+    ctx.save();
+    ctx.shadowColor = '#d97706'; // Darker gold glow
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+
+    // Rotation animation
+    const rotation = (Date.now() * 0.005) % (Math.PI * 2);
+    ctx.translate(coin.x + coin.width / 2, coin.y + coin.height / 2);
+    ctx.rotate(rotation);
+
+    if (coinImageRef.current) {
+      // Apply darker filter to make coin stand out from background
+      ctx.filter = 'brightness(0.7) contrast(1.2) saturate(1.3)';
+      ctx.drawImage(coinImageRef.current, -coin.width / 2, -coin.height / 2, coin.width, coin.height);
+      ctx.filter = 'none';
+    } else {
+      // Fallback coin drawing with darker gradient
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, coin.width / 2);
+      gradient.addColorStop(0, '#d97706'); // Darker gold
+      gradient.addColorStop(0.7, '#b45309'); // Even darker
+      gradient.addColorStop(1, '#92400e'); // Darkest
+      
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(0, 0, coin.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Inner highlight (also darker)
+      ctx.fillStyle = '#fbbf24'; // Darker highlight
+      ctx.beginPath();
+      ctx.arc(-coin.width / 6, -coin.height / 6, coin.width / 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  };
+
   // Enhanced particles with different sizes and colors
   const drawParticles = (ctx: CanvasRenderingContext2D) => {
     particlesRef.current.forEach(particle => {
@@ -248,6 +336,29 @@ export default function GameCanvas() {
     }
   };
 
+  // Create coin collection particles
+  const createCoinParticles = (x: number, y: number) => {
+    const colors = [
+      'rgba(217, 119, 6, 1)', // Darker gold
+      'rgba(180, 83, 9, 1)', // Darker orange gold
+      'rgba(255, 255, 255, 1)', // White
+      'rgba(251, 191, 36, 1)', // Medium gold
+    ];
+
+    for (let i = 0; i < 15; i++) {
+      particlesRef.current.push({
+        x: x + Math.random() * 30,
+        y: y + Math.random() * 30,
+        velocityX: (Math.random() - 0.5) * 8,
+        velocityY: (Math.random() - 0.5) * 8 - 2,
+        life: 30,
+        maxLife: 30,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: Math.random() * 3 + 1
+      });
+    }
+  };
+
   // Check collision
   const checkCollision = (obj1: GameObject, obj2: GameObject): boolean => {
     return obj1.x < obj2.x + obj2.width &&
@@ -263,6 +374,29 @@ export default function GameCanvas() {
     const horizontalOverlap = hulk.x < box.x + box.width && hulk.x + hulk.width > box.x;
     
     return horizontalOverlap && hulkBottom >= boxTop && hulkBottom <= boxTop + 15 && hulk.velocityY >= 0;
+  };
+
+  // Check if coin would overlap with existing boxes
+  const checkCoinBoxOverlap = (coinX: number, coinY: number, coinSize: number): boolean => {
+    const coinBounds = {
+      x: coinX,
+      y: coinY,
+      width: coinSize,
+      height: coinSize
+    };
+
+    return boxesRef.current.some(box => {
+      // Add buffer zone around boxes to prevent coins from being too close
+      const buffer = 50;
+      const expandedBox = {
+        x: box.x - buffer,
+        y: box.y - buffer,
+        width: box.width + buffer * 2,
+        height: box.height + buffer * 2
+      };
+      
+      return checkCollision(coinBounds, expandedBox);
+    });
   };
 
   // Jump function with haptic feedback
@@ -294,15 +428,17 @@ export default function GameCanvas() {
         isRunning: false
       };
       boxesRef.current = [];
+      coinsRef.current = [];
       particlesRef.current = [];
       gameSpeedRef.current = 4;
       lastBoxSpawnRef.current = 0;
+      lastCoinSpawnRef.current = 0;
       difficultyTimerRef.current = 0;
       hapticFeedback.medium();
     }
   }, [gameState, hapticFeedback]);
 
-  // Enhanced game loop with progressive difficulty
+  // Enhanced game loop with progressive difficulty and coins
   const gameLoop = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -356,7 +492,8 @@ export default function GameCanvas() {
       ctx.font = '18px monospace';
       ctx.fillText('Press SPACE or TAP to jump!', rect.width / 2, rect.height / 2 - 20);
       ctx.fillText('Land on boxes to SMASH them! 💥', rect.width / 2, rect.height / 2 + 10);
-      ctx.fillText('Avoid head-on collisions! ⚠️', rect.width / 2, rect.height / 2 + 40);
+      ctx.fillText('Collect coins for bonus points! 🪙', rect.width / 2, rect.height / 2 + 40);
+      ctx.fillText('Avoid head-on collisions! ⚠️', rect.width / 2, rect.height / 2 + 70);
       
       drawHulk(ctx, hulkRef.current);
       return;
@@ -427,6 +564,45 @@ export default function GameCanvas() {
         lastBoxSpawnRef.current = currentTime;
       }
 
+      // Coin spawning at random intervals within jumping range and avoiding box overlap
+      const coinSpawnDelay = Math.max(3000, 5000 - level * 200); // 3-5 seconds based on level
+      if (currentTime - lastCoinSpawnRef.current > coinSpawnDelay && Math.random() < 0.7) {
+        const coinSize = 30;
+        // Calculate maximum jump height (Hulk can reach about 120-140 pixels high)
+        const maxJumpHeight = Math.abs(JUMP_FORCE * JUMP_FORCE) / (2 * GRAVITY); // Physics calculation
+        const reachableHeight = maxJumpHeight * 0.8; // 80% of max jump for safety
+        
+        // Position coin within reachable range (ground level to max jump height)
+        const minY = groundYRef.current - reachableHeight;
+        const maxY = groundYRef.current - 40; // At least 40px above ground
+        
+        // Try multiple positions to avoid box overlap
+        let attempts = 0;
+        let coinX, coinY;
+        do {
+          coinX = rect.width + Math.random() * 200; // Spawn further ahead
+          coinY = Math.random() * (maxY - minY) + minY;
+          attempts++;
+        } while (checkCoinBoxOverlap(coinX, coinY, coinSize) && attempts < 10);
+        
+        // Only spawn coin if we found a good position
+        if (attempts < 10) {
+          coinsRef.current.push({
+            x: coinX,
+            y: coinY,
+            width: coinSize,
+            height: coinSize,
+            zigzagOffset: 0,
+            zigzagSpeed: 0.08 + Math.random() * 0.04, // Slower zigzag for better collection
+            baseY: coinY,
+            collected: false,
+            collectAnimation: 0
+          });
+        }
+        
+        lastCoinSpawnRef.current = currentTime;
+      }
+
       // Update boxes
       boxesRef.current = boxesRef.current.filter(box => {
         box.x -= gameSpeedRef.current;
@@ -460,6 +636,31 @@ export default function GameCanvas() {
         return box.x > -box.width;
       });
 
+      // Update coins with zigzag movement
+      coinsRef.current = coinsRef.current.filter(coin => {
+        coin.x -= gameSpeedRef.current;
+        
+        if (coin.collected) {
+          coin.collectAnimation++;
+          return coin.collectAnimation < 20;
+        }
+        
+        // Zigzag movement with smaller amplitude for better collection
+        coin.zigzagOffset += coin.zigzagSpeed;
+        coin.y = coin.baseY + Math.sin(coin.zigzagOffset) * 20; // Reduced to 20px amplitude
+        
+        // Check collision with Hulk - DON'T affect Hulk's physics
+        if (checkCollision(hulk, coin) && !coin.collected) {
+          coin.collected = true;
+          createCoinParticles(coin.x, coin.y);
+          setScore(prev => prev + 5); // 5 points for coin
+          hapticFeedback.light();
+          // REMOVED: No physics changes to Hulk when collecting coins
+        }
+        
+        return coin.x > -coin.width;
+      });
+
       // Update particles with enhanced physics
       particlesRef.current = particlesRef.current.filter(particle => {
         particle.x += particle.velocityX;
@@ -474,6 +675,7 @@ export default function GameCanvas() {
     // Draw game objects
     drawHulk(ctx, hulkRef.current);
     boxesRef.current.forEach(box => drawBox(ctx, box));
+    coinsRef.current.forEach(coin => drawCoin(ctx, coin));
     drawParticles(ctx);
 
     // Enhanced UI
