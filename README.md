@@ -24,17 +24,17 @@ Tailwind CSS + HTML5 Canvas
 @twa-dev/sdk for Telegram WebApp
 
 🚀 Quick Start
-bash
+```bash
 npm install
 npm run dev        # Development
 npm run build      # Production
 🎮 Controls
 Space/Tap: Jump
-
+```
 Land on boxes: Smash for points
 
 Avoid: Head-on collisions
-
+```
 📁 Structure
 text
 src/
@@ -42,6 +42,7 @@ src/
 ├── hooks/useTelegram.ts        # Telegram integration
 ├── App.tsx                     # Root component
 └── main.tsx                    # Entry point
+```
 ⚙️ Game Mechanics
 Physics: Gravity (0.9), Jump (-16), Ground (80px)
 
